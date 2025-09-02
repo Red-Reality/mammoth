@@ -27,7 +27,8 @@ class FrozenParamWithEandC(ContinualModel):
         
         parser.add_argument('--alpha',dtype = float,default=0.5)
         parser.add_argument('--beta',dtype = float,default= 2)
-        
+        parser.add_argument('--num_of_observe_before_train_in_replaybuffer',dtype=int,default=5
+                            help='Number of observe to train on current data before train one observe in replay data')
         # 添加回放参数
         add_rehearsal_args(parser)
         return parser
@@ -37,6 +38,7 @@ class FrozenParamWithEandC(ContinualModel):
 
         self.freeze_masks = None
         self.last_param = None
+        
 
         # 回放方法
         self.buffer = Buffer(self.args.buffer_size)
@@ -132,26 +134,27 @@ class FrozenParamWithEandC(ContinualModel):
         self.opt.step()
         
         # 使用回放数据进行微调
-        if not self.buffer.is_empty():
-            buf_inputs, buf_labels = self.buffer.get_data(self.args.minibatch_size, transform=self.transform, device=self.device)
-            self.net.zero_grad()
-            buf_outputs = self.net(buf_inputs)
-            replay_loss = self.loss(buf_outputs, buf_labels)
-            replay_loss.backward()
-            # 冻结
-            if self.freeze_masks is None:
-                raise ValueError("freeze_masks is None")
-            self.froze_param()
-            # log:检查还有多少可被训练的参数
-            froze_vector = torch.cat([mask.view(-1)for mask in self.freeze_masks])
-            num_trainable = torch.sum(froze_vector).item()
-            print(f"Number of trainable parameters after freezing: {num_trainable}/{froze_vector.numel()}")
-            if self.freeze_masks is not None:
-                # 可能有问题
-                for (param,mask) in zip(self.net.parameters(),self.freeze_masks.values()):
-                    param.grad *= mask
+        if self.epoch_iteration % self.args.num_of_observe_before_train_in_replaybuffer == 0:
+            if not self.buffer.is_empty():
+                buf_inputs, buf_labels = self.buffer.get_data(self.args.minibatch_size, transform=self.transform, device=self.device)
+                self.net.zero_grad()
+                buf_outputs = self.net(buf_inputs)
+                replay_loss = self.loss(buf_outputs, buf_labels)
+                replay_loss.backward()
+                # 冻结
+                if self.freeze_masks is None:
+                    raise ValueError("freeze_masks is None")
+                self.froze_param()
+                # log:检查还有多少可被训练的参数
+                froze_vector = torch.cat([mask.view(-1)for mask in self.freeze_masks])
+                num_trainable = torch.sum(froze_vector).item()
+                print(f"Number of trainable parameters after freezing: {num_trainable}/{froze_vector.numel()}")
+                if self.freeze_masks is not None:
+                    # 可能有问题
+                    for (param,mask) in zip(self.net.parameters(),self.freeze_masks.values()):
+                        param.grad *= mask
 
-            self.opt.step()
+                self.opt.step()
         return loss.item()
 
 
